@@ -1,38 +1,53 @@
 # convert-to-org
 
-Single-function paste converter for Emacs: HTML, Markdown, or plain text → Org-mode.
+Single-command Emacs utility to paste clipboard content into Org-mode.
+
+Detects content type and converts:
+- HTML → Org via Pandoc
+- GitHub Markdown → Org via Pandoc
+- Plain text → inserted unchanged
+- Regex fallback if Pandoc unavailable
 
 ## Features
 
-- Detects content type: HTML, Markdown, or plain text
-- Converts HTML via Pandoc
-- Converts Markdown via mldoc, kramdown, pandoc, or regex fallback
-- Plain text: direct paste
-- One key binding: `C-c p o`
+- **Automatic detection**: HTML vs Markdown vs Plain
+- **Pandoc-based**: reliable conversion of complex content
+- **Regex fallback**: basic headings, lists, links
+- **One key binding**: `C-c p o`
 
 ## Installation
 
 1. Place `convert-to-org.el` in your Emacs `load-path`.
-2. In your init:
-    ```elisp
-    (require 'convert-to-org)
-    (convert-to-org-setup-keybinding)
-    ```
-3. Install converters:
-    - mldoc: `npm install -g mldoc`
-    - kramdown: `gem install kramdown kramdown-parser-gfm`
-    - pandoc: via package manager
+2. Add to your init:
+   ```elisp
+   (require 'convert-to-org)
+   (convert-to-org-setup-keybinding)
+   ```
+3. Install Pandoc:
+   - macOS: `brew install pandoc`
+   - Debian/Ubuntu: `sudo apt install pandoc`
+   - Windows: `choco install pandoc`
 
 ## Usage
 
-- Copy HTML or Markdown or plain text.
-- In an Org buffer, press `C-c p o`.
-- Content is pasted converted to Org-mode or raw if plain text.
+1. Copy HTML, Markdown, or plain text.
+2. In any Org buffer, press `C-c p o`.
+3. Content is pasted converted to Org-mode or raw if plain.
 
 ## Customization
 
 ```elisp
-;; Preferred converter: mldoc, kramdown, pandoc, or auto
-(setq convert-to-org-converter 'auto)
+;; Pandoc command if non-standard path
+(setq convert-to-org-pandoc-cmd "/usr/local/bin/pandoc")
+
+;; Enable/disable regex fallback
+(setq convert-to-org-fallback-regex t)
 ```
 
+## FAQ
+
+**Q: I see errors about Pandoc not found.**
+A: Ensure Pandoc is installed and on your PATH.
+
+**Q: I want to support other Markdown processors.**
+A: This version uses only Pandoc for reliability. Regex fallback covers basics.
