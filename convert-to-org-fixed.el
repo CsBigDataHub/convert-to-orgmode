@@ -1,6 +1,6 @@
 ;;; convert-to-org.el --- Paste and convert clipboard HTML/Markdown to Org -*- lexical-binding: t; -*-
 
-;; Author: Your Name
+;; Author: CK
 ;; Version: 1.1.1
 ;; Package-Requires: ((emacs "25.1"))
 ;; Keywords: convenience, markup, org
