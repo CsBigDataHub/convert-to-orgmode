@@ -23,6 +23,21 @@ Detects content type and converts:
    (require 'convert-to-org)
    (convert-to-org-setup-keybinding)
    ```
+
+   Or, using `use-package` (lazy-load on Org buffers):
+
+   ```elisp
+   (use-package convert-to-org
+     :load-path "/path/to/convert-to-org"
+     :after org
+     :hook (org-mode . convert-to-org-setup-keybinding)
+     :init
+     ;; Optional customizations:
+     ;; (setq convert-to-org-pandoc-cmd "/usr/local/bin/pandoc")
+     ;; (setq convert-to-org-fallback-regex t)
+   )
+   ```
+
 3. Install Pandoc:
    - macOS: `brew install pandoc`
    - Debian/Ubuntu: `sudo apt install pandoc`
