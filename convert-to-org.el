@@ -13,7 +13,10 @@
 ;; - Removes Jupyter %md magic commands
 ;; - Uses Pandoc via temp files
 ;; - Falls back to simple regex if Pandoc not found
-;; Key binding: C-c p o
+;; - Integrates jupytext for direct Org conversion
+;; Key bindings:
+;;   C-c p o   convert intelligently based on content type
+;;   C-c p j   force Jupyter conversion via jupytext
 
 ;;; Code:
 (require 'subr-x)
@@ -41,54 +44,59 @@
           (current-kill 0)
         (error ""))))
 
-(defun convert-to-org--detect-content-type (text)
-  "Detect whether TEXT is HTML, Jupyter, Markdown, or plain text."
-  (cond
-   ;; HTML detection
-   ((string-match-p "^\\s-*&lt;\\|^\\s-*<[a-zA-Z]" text) 'html)
-   
-   ;; Jupyter notebook detection - look for code blocks or %md magic
-   ((or (string-match-p "```[a-zA-Z]" text)
-        (string-match-p "^\\s-*%md" text)
-        (string-match-p "^\\s-*In\\s-*\\[" text)
-        (string-match-p "^\\s-*Out\\s-*\\[" text)) 'jupyter)
-   
-   ;; Markdown detection - only if we have headings outside of code blocks
-   ((convert-to-org--has-markdown-headers-outside-code text) 'markdown)
-   
-   ;; Default to plain text
-   (t 'plain)))
-
 (defun convert-to-org--has-markdown-headers-outside-code (text)
   "Check if TEXT has markdown headers that are not inside code blocks."
   (let ((lines (split-string text "\n"))
         (in-code-block nil)
-        (has-markdown-header nil))
+        (has-header nil))
     (dolist (line lines)
       (cond
-       ;; Code block start/end
-       ((string-match-p "^\\s-*```" line)
+       ((string-match-p "^\s-*```
         (setq in-code-block (not in-code-block)))
-       ;; Check for markdown headers only outside code blocks
        ((and (not in-code-block)
-             (string-match-p "^\\s-*#\\s-+\\w" line))
-        (setq has-markdown-header t))))
-    has-markdown-header))
+             (string-match-p "^\s-*#\s-+\w" line))
+        (setq has-header t))))
+    has-header))
+
+(defun convert-to-org--detect-content-type (text)
+  "Detect whether TEXT is HTML, Jupyter, Markdown, or plain text."
+  (cond
+   ;; HTML detection
+   ((string-match-p "^\s-*<" text) 'html)
+   ;; Jupyter detection: code fences, %md magic, or In/Out prompts
+   ((or (string-match-p "^\s-*```[a-zA-Z]" text)
+        (string-match-p "^\s-*%md" text)
+        (string-match-p "^\s-*In\s-*\\[" text)
+        (string-match-p "^\s-*Out\s-*\\[" text))
+    'jupyter)
+   ;; Markdown detection
+   ((convert-to-org--has-markdown-headers-outside-code text) 'markdown)
+   ;; Default to plain text
+   (t 'plain)))
 
 (defun convert-to-org--preprocess-jupyter (text)
   "Preprocess Jupyter notebook content to prepare for conversion."
   (let ((processed text))
     ;; Remove %md magic commands
-    (setq processed (replace-regexp-in-string "^\\s-*%md\\s-*\n?" "" processed))
-    
-    ;; Remove Jupyter cell markers like In [1]: or Out [1]:
-    (setq processed (replace-regexp-in-string "^\\s-*In\\s-*\\[[0-9]*\\]:\\s-*\n?" "" processed))
-    (setq processed (replace-regexp-in-string "^\\s-*Out\\s-*\\[[0-9]*\\]:\\s-*\n?" "" processed))
-    
-    ;; Clean up extra whitespace
+    (setq processed (replace-regexp-in-string "^\s-*%md\s-*\n?" "" processed))
+    ;; Remove In/Out markers
+    (setq processed (replace-regexp-in-string "^\s-*In\s-*\\[[0-9]*\\]:\s-*\n?" "" processed))
+    (setq processed (replace-regexp-in-string "^\s-*Out\s-*\\[[0-9]*\\]:\s-*\n?" "" processed))
+    ;; Collapse multiple blank lines
     (setq processed (replace-regexp-in-string "\n\n\n+" "\n\n" processed))
-    
     processed))
+
+(defun convert-to-org--jupytext (text)
+  "Convert Jupyter-flavored TEXT to Org using jupytext."
+  (with-temp-buffer
+    (insert text)
+    (let ((exit-code
+           (call-process-region (point-min) (point-max)
+                                "jupytext" t t nil
+                                "--to" "org" "--pipe")))
+      (if (zerop exit-code)
+          (buffer-string)
+        (error "jupytext conversion failed: exit %d" exit-code)))))
 
 (defun convert-to-org--pandoc (from to text)
   "Run Pandoc FROM format TO format on TEXT via a temp file."
@@ -115,46 +123,36 @@
   (let ((lines (split-string text "\n"))
         (result '())
         (in-code-block nil)
-        (code-block-lang nil))
-    
+        (lang nil))
     (dolist (line lines)
       (cond
-       ;; Handle code block start
-       ((string-match "^\\s-*```\\([a-zA-Z]*\\)" line)
+       ;; Start of code block
+       ((string-match "^\s-*```
         (setq in-code-block t)
-        (setq code-block-lang (match-string 1 line))
-        (push (format "#+BEGIN_SRC %s" (or code-block-lang "")) result))
-       
-       ;; Handle code block end
-       ((and in-code-block (string-match-p "^\\s-*```\\s-*$" line))
+        (setq lang (match-string 1 line))
+        (push (format "#+BEGIN_SRC %s" (or lang "")) result))
+       ;; End of code block
+       ((and in-code-block (string-match-p "^\s-*```" line))
         (setq in-code-block nil)
-        (setq code-block-lang nil)
+        (setq lang nil)
         (push "#+END_SRC" result))
-       
-       ;; Inside code block - preserve as-is
+       ;; Inside code block: preserve
        (in-code-block
         (push line result))
-       
-       ;; Outside code block - apply markdown conversions
+       ;; Outside code block: apply conversions
        (t
-        (let ((converted-line line))
-          ;; Convert headers (only outside code blocks)
-          (setq converted-line (replace-regexp-in-string "^# \\(.*\\)" "* \\1" converted-line))
-          (setq converted-line (replace-regexp-in-string "^## \\(.*\\)" "** \\1" converted-line))
-          (setq converted-line (replace-regexp-in-string "^### \\(.*\\)" "*** \\1" converted-line))
-          (setq converted-line (replace-regexp-in-string "^#### \\(.*\\)" "**** \\1" converted-line))
-          (setq converted-line (replace-regexp-in-string "^##### \\(.*\\)" "***** \\1" converted-line))
-          
-          ;; Convert lists
-          (setq converted-line (replace-regexp-in-string "^[-*] " "- " converted-line))
-          (setq converted-line (replace-regexp-in-string "^[0-9]+\\. " "1. " converted-line))
-          
-          ;; Convert links
-          (setq converted-line (replace-regexp-in-string
-                                "\\[\\([^]]+\\)\\](\\([^)]+\\))" "[[\\2][\\1]]" converted-line))
-          
-          (push converted-line result)))))
-    
+        (let ((s line))
+          ;; Headers
+          (setq s (replace-regexp-in-string "^# \\(.*\\)" "* \\1" s))
+          (setq s (replace-regexp-in-string "^## \\(.*\\)" "** \\1" s))
+          (setq s (replace-regexp-in-string "^### \\(.*\\)" "*** \\1" s))
+          ;; Lists
+          (setq s (replace-regexp-in-string "^[-*] " "- " s))
+          (setq s (replace-regexp-in-string "^[0-9]+\\. " "1. " s))
+          ;; Links
+          (setq s (replace-regexp-in-string
+                   "\\[\\([^]]+\\)\\](\\([^)]+\\))" "[[\\2][\\1]]" s))
+          (push s result)))))
     (string-join (reverse result) "\n")))
 
 ;;;###autoload
@@ -163,26 +161,26 @@
   (interactive)
   (let* ((raw (convert-to-org--get-clipboard-text))
          (type (convert-to-org--detect-content-type raw))
-         (preprocessed (if (eq type 'jupyter)
-                          (convert-to-org--preprocess-jupyter raw)
-                        raw))
+         (clean (if (eq type 'jupyter)
+                    (convert-to-org--preprocess-jupyter raw)
+                  raw))
          (out (pcase type
-                ('html     (convert-to-org--pandoc "html" "org" preprocessed))
-                ('jupyter  (convert-to-org--pandoc "gfm" "org" preprocessed))
-                ('markdown (convert-to-org--pandoc "gfm" "org" preprocessed))
-                (_         preprocessed))))
+                ('html     (convert-to-org--pandoc "html" "org" clean))
+                ('jupyter  (convert-to-org--jupytext clean))
+                ('markdown (convert-to-org--pandoc "gfm" "org" clean))
+                (_         clean))))
     (insert out)))
 
 ;;;###autoload
 (defun convert-to-org-paste-as-jupyter ()
-  "Force paste clipboard content as Jupyter notebook format."
+  "Force paste clipboard content as Jupyter notebook format via jupytext."
   (interactive)
   (let* ((raw (convert-to-org--get-clipboard-text))
-         (preprocessed (convert-to-org--preprocess-jupyter raw))
-         (out (if (and (executable-find convert-to-org-pandoc-cmd)
-                      (not (string-empty-p preprocessed)))
-                  (convert-to-org--pandoc "gfm" "org" preprocessed)
-                (convert-to-org--regex-fallback preprocessed))))
+         (clean (convert-to-org--preprocess-jupyter raw))
+         (out (if (and (executable-find "jupytext")
+                       (not (string-empty-p clean)))
+                  (convert-to-org--jupytext clean)
+                (convert-to-org--regex-fallback clean))))
     (insert out)))
 
 ;;;###autoload
