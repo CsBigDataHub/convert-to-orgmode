@@ -1,7 +1,7 @@
 ;;; convert-to-org.el --- Paste and convert clipboard HTML/Markdown/Jupyter -*- lexical-binding: t; -*-
 
 ;; Author: CK
-;; Version: 1.3.0
+;; Version: 1.3.1
 ;; Package-Requires: ((emacs "25.1"))
 ;; Keywords: convenience, markup, org, jupyter
 
@@ -51,10 +51,10 @@
         (has-header nil))
     (dolist (line lines)
       (cond
-       ((string-match-p "^\s-*```
+       ((string-match-p "^\\s-*```
         (setq in-code-block (not in-code-block)))
        ((and (not in-code-block)
-             (string-match-p "^\s-*#\s-+\w" line))
+             (string-match-p "^\\s-*#\\s-+\\w" line))
         (setq has-header t))))
     has-header))
 
@@ -62,12 +62,12 @@
   "Detect whether TEXT is HTML, Jupyter, Markdown, or plain text."
   (cond
    ;; HTML detection
-   ((string-match-p "^\s-*<" text) 'html)
+   ((string-match-p "^\\s-*<" text) 'html)
    ;; Jupyter detection: code fences, %md magic, or In/Out prompts
-   ((or (string-match-p "^\s-*```[a-zA-Z]" text)
-        (string-match-p "^\s-*%md" text)
-        (string-match-p "^\s-*In\s-*\\[" text)
-        (string-match-p "^\s-*Out\s-*\\[" text))
+   ((or (string-match-p "^\\s-*```[a-zA-Z]" text)
+        (string-match-p "^\\s-*%md" text)
+        (string-match-p "^\\s-*In\\s-*\\[" text)
+        (string-match-p "^\\s-*Out\\s-*\\[" text))
     'jupyter)
    ;; Markdown detection
    ((convert-to-org--has-markdown-headers-outside-code text) 'markdown)
@@ -78,10 +78,10 @@
   "Preprocess Jupyter notebook content to prepare for conversion."
   (let ((processed text))
     ;; Remove %md magic commands
-    (setq processed (replace-regexp-in-string "^\s-*%md\s-*\n?" "" processed))
+    (setq processed (replace-regexp-in-string "^\\s-*%md\\s-*\\n?" "" processed))
     ;; Remove In/Out markers
-    (setq processed (replace-regexp-in-string "^\s-*In\s-*\\[[0-9]*\\]:\s-*\n?" "" processed))
-    (setq processed (replace-regexp-in-string "^\s-*Out\s-*\\[[0-9]*\\]:\s-*\n?" "" processed))
+    (setq processed (replace-regexp-in-string "^\\s-*In\\s-*\\[[0-9]*\\]:\\s-*\\n?" "" processed))
+    (setq processed (replace-regexp-in-string "^\\s-*Out\\s-*\\[[0-9]*\\]:\\s-*\\n?" "" processed))
     ;; Collapse multiple blank lines
     (setq processed (replace-regexp-in-string "\n\n\n+" "\n\n" processed))
     processed))
@@ -127,12 +127,12 @@
     (dolist (line lines)
       (cond
        ;; Start of code block
-       ((string-match "^\s-*```
+       ((string-match "^\\s-*```
         (setq in-code-block t)
         (setq lang (match-string 1 line))
         (push (format "#+BEGIN_SRC %s" (or lang "")) result))
        ;; End of code block
-       ((and in-code-block (string-match-p "^\s-*```" line))
+       ((and in-code-block (string-match-p "^\\s-*```" line))
         (setq in-code-block nil)
         (setq lang nil)
         (push "#+END_SRC" result))
