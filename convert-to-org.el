@@ -1,7 +1,7 @@
 ;;; convert-to-org.el --- Paste and convert clipboard HTML/Markdown/Jupyter -*- lexical-binding: t; -*-
 
 ;; Author: CK
-;; Version: 1.3.1
+;; Version: 1.3.6
 ;; Package-Requires: ((emacs "25.1"))
 ;; Keywords: convenience, markup, org, jupyter
 
@@ -45,16 +45,16 @@
         (error ""))))
 
 (defun convert-to-org--has-markdown-headers-outside-code (text)
-  "Check if TEXT has markdown headers that are not inside code blocks."
+  "Check if TEXT has markdown headers not inside code blocks."
   (let ((lines (split-string text "\n"))
         (in-code-block nil)
         (has-header nil))
     (dolist (line lines)
       (cond
-       ((string-match-p "^\\s-*```
+       ((string-match-p "^[ \t]*```" line)
         (setq in-code-block (not in-code-block)))
        ((and (not in-code-block)
-             (string-match-p "^\\s-*#\\s-+\\w" line))
+             (string-match-p "^[ \t]*#[ \t]+[a-zA-Z]" line))
         (setq has-header t))))
     has-header))
 
@@ -62,12 +62,12 @@
   "Detect whether TEXT is HTML, Jupyter, Markdown, or plain text."
   (cond
    ;; HTML detection
-   ((string-match-p "^\\s-*<" text) 'html)
-   ;; Jupyter detection: code fences, %md magic, or In/Out prompts
-   ((or (string-match-p "^\\s-*```[a-zA-Z]" text)
-        (string-match-p "^\\s-*%md" text)
-        (string-match-p "^\\s-*In\\s-*\\[" text)
-        (string-match-p "^\\s-*Out\\s-*\\[" text))
+   ((string-match-p "^[ \t]*<" text) 'html)
+   ;; Jupyter detection: code fences, %md, In/Out
+   ((or (string-match-p "^[ \t]*```[a-zA-Z]" text)
+        (string-match-p "^[ \t]*%md" text)
+        (string-match-p "^[ \t]*In[ \t]*\\[" text)
+        (string-match-p "^[ \t]*Out[ \t]*\\[" text))
     'jupyter)
    ;; Markdown detection
    ((convert-to-org--has-markdown-headers-outside-code text) 'markdown)
@@ -77,13 +77,10 @@
 (defun convert-to-org--preprocess-jupyter (text)
   "Preprocess Jupyter notebook content to prepare for conversion."
   (let ((processed text))
-    ;; Remove %md magic commands
-    (setq processed (replace-regexp-in-string "^\\s-*%md\\s-*\\n?" "" processed))
-    ;; Remove In/Out markers
-    (setq processed (replace-regexp-in-string "^\\s-*In\\s-*\\[[0-9]*\\]:\\s-*\\n?" "" processed))
-    (setq processed (replace-regexp-in-string "^\\s-*Out\\s-*\\[[0-9]*\\]:\\s-*\\n?" "" processed))
-    ;; Collapse multiple blank lines
-    (setq processed (replace-regexp-in-string "\n\n\n+" "\n\n" processed))
+    (setq processed (replace-regexp-in-string "^[ \t]*%md[ \t]*\\(\\n\\)?" "" processed))
+    (setq processed (replace-regexp-in-string "^[ \t]*In[ \t]*\\[[0-9]*\\]:[ \t]*\\(\\n\\)?" "" processed))
+    (setq processed (replace-regexp-in-string "^[ \t]*Out[ \t]*\\[[0-9]*\\]:[ \t]*\\(\\n\\)?" "" processed))
+    (setq processed (replace-regexp-in-string "\\(\\n\\)\\{3,\\}" "\n\n" processed))
     processed))
 
 (defun convert-to-org--jupytext (text)
@@ -119,41 +116,38 @@
       (delete-file tmp))))
 
 (defun convert-to-org--regex-fallback (text)
-  "Basic regex fallback converting Markdown-like TEXT to Org, preserving code blocks."
+  "Basic regex fallback converting Markdown-like TEXT to Org."
   (let ((lines (split-string text "\n"))
         (result '())
         (in-code-block nil)
-        (lang nil))
+        (lang ""))
     (dolist (line lines)
       (cond
        ;; Start of code block
-       ((string-match "^\\s-*```
+       ((string-match "^[ \t]*```\\([a-zA-Z]*\\)" line)
         (setq in-code-block t)
         (setq lang (match-string 1 line))
-        (push (format "#+BEGIN_SRC %s" (or lang "")) result))
+        (push (concat "#+BEGIN_SRC " lang) result))
        ;; End of code block
-       ((and in-code-block (string-match-p "^\\s-*```" line))
+       ((and in-code-block (string-match-p "^[ \t]*```" line))
         (setq in-code-block nil)
-        (setq lang nil)
+        (setq lang "")
         (push "#+END_SRC" result))
        ;; Inside code block: preserve
        (in-code-block
         (push line result))
-       ;; Outside code block: apply conversions
+       ;; Outside code block
        (t
         (let ((s line))
-          ;; Headers
           (setq s (replace-regexp-in-string "^# \\(.*\\)" "* \\1" s))
           (setq s (replace-regexp-in-string "^## \\(.*\\)" "** \\1" s))
           (setq s (replace-regexp-in-string "^### \\(.*\\)" "*** \\1" s))
-          ;; Lists
           (setq s (replace-regexp-in-string "^[-*] " "- " s))
           (setq s (replace-regexp-in-string "^[0-9]+\\. " "1. " s))
-          ;; Links
           (setq s (replace-regexp-in-string
                    "\\[\\([^]]+\\)\\](\\([^)]+\\))" "[[\\2][\\1]]" s))
           (push s result)))))
-    (string-join (reverse result) "\n")))
+    (string-join (nreverse result) "\n")))
 
 ;;;###autoload
 (defun convert-to-org-paste ()
