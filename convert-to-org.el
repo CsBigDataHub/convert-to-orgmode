@@ -1,7 +1,7 @@
 ;;; convert-to-org.el --- Paste and convert clipboard HTML/Markdown/Jupyter -*- lexical-binding: t; -*-
 
 ;; Author: CK
-;; Version: 1.4.0
+;; Version: 1.4.1
 ;; Package-Requires: ((emacs "25.1"))
 ;; Keywords: convenience, markup, org, jupyter
 
@@ -23,7 +23,6 @@
 
 ;;; Code:
 (require 'subr-x)
-(require 'eww)
 
 (defgroup convert-to-org nil
   "Convert clipboard HTML, Markdown, or Jupyter to Org-mode when pasting."
@@ -122,10 +121,10 @@ Options: simple, dom, eww."
 (defun convert-to-org--preprocess-jupyter (text)
   "Preprocess Jupyter notebook content to prepare for conversion."
   (let ((processed text))
-    (setq processed (replace-regexp-in-string "^[ \t]*%md[ \t]*\\(\\n\\)?" "" processed))
-    (setq processed (replace-regexp-in-string "^[ \t]*In[ \t]*\\[[0-9]*\\]:[ \t]*\\(\\n\\)?" "" processed))
-    (setq processed (replace-regexp-in-string "^[ \t]*Out[ \t]*\\[[0-9]*\\]:[ \t]*\\(\\n\\)?" "" processed))
-    (setq processed (replace-regexp-in-string "\\(\\n\\)\\{3,\\}" "\n\n" processed))
+    (setq processed (replace-regexp-in-string "^[ \t]*%md[ \t]*\\(\n\\)?" "" processed))
+    (setq processed (replace-regexp-in-string "^[ \t]*In[ \t]*\\[[0-9]*\\]:[ \t]*\\(\n\\)?" "" processed))
+    (setq processed (replace-regexp-in-string "^[ \t]*Out[ \t]*\\[[0-9]*\\]:[ \t]*\\(\n\\)?" "" processed))
+    (setq processed (replace-regexp-in-string "\\(\n\\)\\{3,\\}" "\n\n" processed))
     processed))
 
 (defun convert-to-org--html-to-org-pandoc (html-text)
@@ -242,19 +241,34 @@ Options: simple, dom, eww."
      (message "HTML conversion failed: %s. Using simple fallback." (error-message-string err))
      (convert-to-org--simple-html-to-org html-text))))
 
+(defun convert-to-org--jupytext-compatible-p (text)
+  "Check if TEXT is a Jupytext-compatible notebook snippet.
+Return non-nil if TEXT looks like JSON notebook or Org with Jupytext metadata."
+  (or
+   (and (string-prefix-p "{" (string-trim-left text))
+        (string-match-p "\"nbformat\"" text))
+   (string-match-p "^#\\+jupyter-" text)))
+
+(defun convert-to-org--looks-like-jupyter-cell (text)
+  "Check if TEXT looks like a Jupyter notebook cell fragment."
+  (or
+   (string-match-p "^%md" text)
+   (string-match-p "^# In\\[" text)
+   (string-match-p "^# Out\\[" text)))
+
 (defun convert-to-org--jupytext (text)
-  "Convert Jupyter-flavored TEXT to Org using jupytext."
-  (if (not (executable-find "jupytext"))
-      (error "jupytext not found")
-    (with-temp-buffer
-      (insert text)
-      (let ((exit-code
-             (call-process-region (point-min) (point-max)
-                                  "jupytext" t t nil
-                                  "--to" "org" "--pipe")))
-        (if (zerop exit-code)
-            (buffer-string)
-          (error "jupytext conversion failed: exit %d" exit-code))))))
+  "Convert Jupyter-flavored TEXT to Org using jupytext if compatible."
+  (if (convert-to-org--jupytext-compatible-p text)
+      (with-temp-buffer
+        (insert text)
+        (let ((exit-code
+               (call-process-region (point-min) (point-max)
+                                    "jupytext" t t nil
+                                    "--to" "org" "--pipe")))
+          (if (zerop exit-code)
+              (buffer-string)
+            (error "jupytext conversion failed: exit %d" exit-code))))
+    (error "Content not compatible with jupytext conversion")))
 
 (defun convert-to-org--pandoc (from to text)
   "Run Pandoc FROM format TO format on TEXT via a temp file."
@@ -312,22 +326,32 @@ Options: simple, dom, eww."
 
 ;;;###autoload
 (defun convert-to-org-paste ()
-  "Paste from clipboard, converting HTML/Markdown/Jupyter to Org or plain text."
+  "Paste from clipboard, converting HTML/Markdown/Jupyter to Org."
   (interactive)
   (let* ((raw (convert-to-org--get-clipboard-text))
          (type (convert-to-org--detect-content-type raw))
          (clean (if (eq type 'jupyter)
                     (convert-to-org--preprocess-jupyter raw)
                   raw))
-         (out (condition-case err
-                  (pcase type
-                    ('html     (convert-to-org--html-to-org clean))
-                    ('jupyter  (convert-to-org--jupytext clean))
-                    ('markdown (convert-to-org--pandoc "gfm" "org" clean))
-                    (_         clean))
-                (error
-                 (message "Conversion failed: %s" (error-message-string err))
-                 clean))))
+         (out
+          (condition-case err
+              (pcase type
+                ('html (convert-to-org--html-to-org clean))
+                ('jupyter
+                 (condition-case _err2
+                     (convert-to-org--jupytext clean)
+                   (error
+                    (message "Jupytext failed, falling back")
+                    (if (convert-to-org--looks-like-jupyter-cell clean)
+                        (if (executable-find convert-to-org-pandoc-cmd)
+                            (convert-to-org--pandoc "gfm" "org" clean)
+                          (convert-to-org--regex-fallback clean))
+                      clean))))
+                ('markdown (convert-to-org--pandoc "gfm" "org" clean))
+                (_ clean))
+            (error
+             (message "Conversion failed: %s" (error-message-string err))
+             clean))))
     (insert out)))
 
 ;;;###autoload
@@ -337,7 +361,8 @@ Options: simple, dom, eww."
   (let* ((raw (convert-to-org--get-clipboard-text))
          (clean (convert-to-org--preprocess-jupyter raw))
          (out (condition-case err
-                  (if (executable-find "jupytext")
+                  (if (and (executable-find "jupytext")
+                           (convert-to-org--jupytext-compatible-p clean))
                       (convert-to-org--jupytext clean)
                     (convert-to-org--regex-fallback clean))
                 (error
